@@ -1,14 +1,29 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 	"log"
+	"os"
+	"strings"
+	"time"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
+	timestamp := strings.ReplaceAll(time.Now().Format("2006-01-02T15-04-05.999999999"), ".", "-")
+	logfile, err := os.OpenFile(
+		timestamp + ".txt",
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+		0644)
+	if err != nil {
+		log.Fatalln(err)
+		return
+	}
+	defer logfile.Close()
+	log.SetOutput(logfile)
 
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {
@@ -102,18 +117,20 @@ func main() {
 	sb[34] = byte((addr >> 8) & 0xFF)
 	sb[35] = byte((addr >> 0) & 0xFF)
 
+	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
+
 writeloop:
 	for i := 0; i < 600; i++ {
 		// write:
-		log.Printf("%s: write(VGET)\n", portName)
+		log.Printf("write(VGET)\n")
 		n, err := f.Write(sb)
 		if err != nil {
-			log.Printf("%s: write(): %v\n", portName, err)
+			log.Printf("write(): %v\n", err)
 			continue
 		}
-		log.Printf("%s: write(): wrote %d bytes\n", portName, n)
+		log.Printf("write(): wrote %d bytes\n", n)
 		if n != len(sb) {
-			log.Printf("%s: write(): expected to write 64 bytes but wrote %d\n", portName, n)
+			log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
 			continue
 		}
 
@@ -121,25 +138,26 @@ writeloop:
 		nr := 0
 		data := make([]byte, 0, expectedPaddedBytes)
 		for nr < expectedPaddedBytes {
-			rb := make([]byte, 64)
-			log.Printf("%s: read()\n", portName)
+			rb := make([]byte, 256)
+			log.Printf("read()\n")
 			n, err = f.Read(rb)
 			if err != nil {
-				log.Printf("%s: read(): %v\n", portName, err)
+				log.Printf("read(): %v\n", err)
 				continue writeloop
 			}
 
 			nr += n
-			log.Printf("%s: read(): %d bytes (%d bytes total)\n", portName, n, nr)
+			log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
 
 			data = append(data, rb[:n]...)
 		}
 
 		if nr != expectedPaddedBytes {
-			log.Printf("%s: read(): expected %d padded bytes but got %d\n", portName, expectedPaddedBytes, nr)
+			log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
 		}
 
 		data = data[:expectedBytes]
-		log.Printf("%s: [$10] = $%02x; [$A0] = $%02x\n", portName, data[0x00], data[0x90])
+		log.Printf("VGET response:\n%s\n", hex.Dump(data))
+		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x00], data[0x0A])
 	}
 }
