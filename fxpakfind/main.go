@@ -76,9 +76,10 @@ func main() {
 			Parity:   serial.NoParity,
 			StopBits: serial.OneStopBit,
 		})
-		if err != nil {
-			log.Printf("%s: %v\n", portName, err)
+		if err == nil {
+			break
 		}
+		log.Printf("%s: %v\n", portName, err)
 	}
 	if err != nil {
 		log.Fatal("Failed to open serial port at any baud rate\n")
@@ -93,7 +94,4 @@ func main() {
 			log.Printf("%s: %v\n", portName, err)
 		}
 	})()
-
-	// Perform some timing tests:
-	//log.Printf("%s: write()\n", portName)
 }
