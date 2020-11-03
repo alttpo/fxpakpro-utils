@@ -8,6 +8,8 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
+
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {
 		log.Fatal(err)
@@ -52,19 +54,6 @@ func main() {
 		19200,
 		14400,
 		9600,
-		7200,
-		4800,
-		2400,
-		1800,
-		1200,
-		600,
-		300,
-		200,
-		150,
-		134,
-		110,
-		75,
-		50,
 	}
 
 	f := serial.Port(nil)
