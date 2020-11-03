@@ -76,9 +76,10 @@ func main() {
 			Parity:   serial.NoParity,
 			StopBits: serial.OneStopBit,
 		})
-		if err != nil {
-			log.Printf("%s: %v\n", portName, err)
+		if err == nil {
+			break
 		}
+		log.Printf("%s: %v\n", portName, err)
 	}
 	if err != nil {
 		log.Fatal("Failed to open serial port at any baud rate\n")
@@ -95,5 +96,39 @@ func main() {
 	})()
 
 	// Perform some timing tests:
-	//log.Printf("%s: write()\n", portName)
+	sb := make([]byte, 64)
+	sb[0] = byte('U')
+	sb[1] = byte('S')
+	sb[2] = byte('B')
+	sb[3] = byte('A')
+	sb[4] = byte(OpVGET)
+	sb[5] = byte(SpaceSNES)
+	sb[6] = byte(FlagDATA64B | FlagNORESP)
+	// 4-byte struct: 1 byte size, 3 byte address
+	sb[32] = byte(0xF0)
+	addr := 0x7E0010
+	sb[33] = byte((addr >> 16) & 0xFF)
+	sb[34] = byte((addr >> 8) & 0xFF)
+	sb[35] = byte((addr >> 0) & 0xFF)
+
+	rb := make([]byte, 512)
+
+	for i := 0; i < 600; i++ {
+		// write:
+		log.Printf("%s: write(VGET)\n", portName)
+		n, err := f.Write(sb)
+		if err != nil {
+			log.Printf("%s: %v\n", portName, err)
+			continue
+		}
+		if n != 64 {
+			log.Printf("%s: expected to write 64 bytes but wrote %d\n", portName, n)
+			continue
+		}
+
+		// read:
+		n, err = f.Read(rb)
+		rb = rb[:n]
+
+	}
 }
