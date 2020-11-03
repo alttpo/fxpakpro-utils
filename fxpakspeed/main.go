@@ -8,6 +8,8 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
+
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {
 		log.Fatal(err)
@@ -52,19 +54,6 @@ func main() {
 		19200,
 		14400,
 		9600,
-		7200,
-		4800,
-		2400,
-		1800,
-		1200,
-		600,
-		300,
-		200,
-		150,
-		134,
-		110,
-		75,
-		50,
 	}
 
 	f := serial.Port(nil)
@@ -96,6 +85,8 @@ func main() {
 	})()
 
 	// Perform some timing tests:
+	const expectedBytes = 0xF0
+	const expectedPaddedBytes = 0x100
 	sb := make([]byte, 64)
 	sb[0] = byte('U')
 	sb[1] = byte('S')
@@ -111,24 +102,44 @@ func main() {
 	sb[34] = byte((addr >> 8) & 0xFF)
 	sb[35] = byte((addr >> 0) & 0xFF)
 
-	rb := make([]byte, 512)
-
+writeloop:
 	for i := 0; i < 600; i++ {
 		// write:
 		log.Printf("%s: write(VGET)\n", portName)
 		n, err := f.Write(sb)
 		if err != nil {
-			log.Printf("%s: %v\n", portName, err)
+			log.Printf("%s: write(): %v\n", portName, err)
 			continue
 		}
-		if n != 64 {
-			log.Printf("%s: expected to write 64 bytes but wrote %d\n", portName, n)
+		log.Printf("%s: write(): wrote %d bytes\n", portName, n)
+		if n != len(sb) {
+			log.Printf("%s: write(): expected to write 64 bytes but wrote %d\n", portName, n)
 			continue
 		}
 
 		// read:
-		n, err = f.Read(rb)
-		rb = rb[:n]
+		nr := 0
+		data := make([]byte, 0, expectedPaddedBytes)
+		for nr < expectedPaddedBytes {
+			rb := make([]byte, 64)
+			log.Printf("%s: read()\n", portName)
+			n, err = f.Read(rb)
+			if err != nil {
+				log.Printf("%s: read(): %v\n", portName, err)
+				continue writeloop
+			}
 
+			nr += n
+			log.Printf("%s: read(): %d bytes (%d bytes total)\n", portName, n, nr)
+
+			data = append(data, rb[:n]...)
+		}
+
+		if nr != expectedPaddedBytes {
+			log.Printf("%s: read(): expected %d padded bytes but got %d\n", portName, expectedPaddedBytes, nr)
+		}
+
+		data = data[:expectedBytes]
+		log.Printf("%s: [$10] = $%02x; [$A0] = $%02x\n", portName, data[0x00], data[0x90])
 	}
 }
