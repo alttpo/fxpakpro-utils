@@ -95,5 +95,5 @@ func main() {
 	})()
 
 	// Perform some timing tests:
-	log.Printf("%s: read()\n", portName)
+	//log.Printf("%s: write()\n", portName)
 }
