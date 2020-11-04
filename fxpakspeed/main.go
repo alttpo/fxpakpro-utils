@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -107,6 +108,9 @@ func main() {
 			log.Printf("%s: %v\n", portName, err)
 		}
 	})()
+
+	// Disable GC
+	debug.SetGCPercent(-1)
 
 	//writeTest(f)
 	writeTestSpinLoop(f)
