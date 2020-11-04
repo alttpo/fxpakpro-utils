@@ -89,8 +89,17 @@ func main() {
 	}
 	log.Printf("%s: success!\n", portName)
 
+	log.Printf("%s: Set DTR on\n", portName)
+	if err = f.SetDTR(true); err != nil {
+		log.Printf("%s: %v\n", portName, err)
+	}
+
 	// Close the port:
 	defer (func() {
+		log.Printf("%s: Set DTR off\n", portName)
+		if err = f.SetDTR(false); err != nil {
+			log.Printf("%s: %v\n", portName, err)
+		}
 		log.Printf("%s: close()\n", portName)
 		err = f.Close()
 		if err != nil {
