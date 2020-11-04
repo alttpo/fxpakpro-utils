@@ -6,13 +6,14 @@ import (
 	"go.bug.st/serial/enumerator"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
-	timestamp := strings.ReplaceAll(time.Now().Format("2006-01-02T15-04-05.999999999"), ".", "-")
+	timestamp := strings.ReplaceAll(time.Now().UTC().Format("2006-01-02T15-04-05.000000"), ".", "-")
 	logfile, err := os.OpenFile(
 		timestamp + ".txt",
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
@@ -107,23 +108,15 @@ func main() {
 		}
 	})()
 
+	//writeTest(f)
+	writeTestSpinLoop(f)
+}
+
+func writeTest(f serial.Port) {
 	// Perform some timing tests:
 	const expectedBytes = 0xFF
 	const expectedPaddedBytes = 0x100
-	sb := make([]byte, 64)
-	sb[0] = byte('U')
-	sb[1] = byte('S')
-	sb[2] = byte('B')
-	sb[3] = byte('A')
-	sb[4] = byte(OpVGET)
-	sb[5] = byte(SpaceSNES)
-	sb[6] = byte(FlagDATA64B | FlagNORESP)
-	// 4-byte struct: 1 byte size, 3 byte address
-	sb[32] = byte(expectedBytes)
-	addr := 0xF50000
-	sb[33] = byte((addr >> 16) & 0xFF)
-	sb[34] = byte((addr >> 8) & 0xFF)
-	sb[35] = byte((addr >> 0) & 0xFF)
+	sb := makeVGET(0xF50000, expectedBytes)
 
 	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
 
@@ -143,29 +136,118 @@ writeloop:
 		}
 
 		// read:
-		nr := 0
-		data := make([]byte, 0, expectedPaddedBytes)
-		for nr < expectedPaddedBytes {
-			rb := make([]byte, 256)
-			log.Printf("read()\n")
-			n, err = f.Read(rb)
-			if err != nil {
-				log.Printf("read(): %v\n", err)
-				continue writeloop
-			}
-
-			nr += n
-			log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
-
-			data = append(data, rb[:n]...)
+		data := readData(f, expectedPaddedBytes, expectedBytes)
+		if data == nil {
+			continue writeloop
 		}
-
-		if nr != expectedPaddedBytes {
-			log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
-		}
-
-		data = data[:expectedBytes]
 		log.Printf("VGET response:\n%s\n", hex.Dump(data))
 		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
 	}
+}
+
+func writeTestSpinLoop(f serial.Port) {
+	runtime.LockOSThread()
+
+	// SNES master clock ~= 1.89e9/88 Hz
+	// SNES runs 1 scanline every 1364 master cycles
+	// Frames are 262 scanlines in non-interlace mode (1 scanline takes 1360 clocks every other frame)
+	// 1 frame takes 357366 master clocks
+	const snes_frame_clocks = (261 * 1364) + 1362
+
+	const snes_frame_nanoclocks = snes_frame_clocks * 1_000_000_000
+
+	// 1 frame takes 0.016639356613757 seconds
+	// 0.016639356613757 seconds = 16,639,356.613757 nanoseconds
+
+	const snes_frame_time_nanoseconds_int = int(snes_frame_nanoclocks) / (int(1.89e9) / int(88))
+	const snes_frame_time_nanoseconds_flt = snes_frame_nanoclocks / ((1.89e9) / 88)
+
+	// Perform some timing tests:
+	const expectedBytes = 0xFF
+	const expectedPaddedBytes = 0x100
+	sb := makeVGET(0xF50000, expectedBytes)
+
+	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
+
+	// duration between VGETs:
+	const dur = time.Nanosecond * time.Duration(snes_frame_time_nanoseconds_int)
+
+	last_t := time.Now()
+
+writeloop:
+	for i := 0; i < 600; i++ {
+		for time.Since(last_t) < dur {
+		}
+		t := time.Now()
+
+		//log.Printf("delta %v ns; %d frames remaining\n", t.Sub(last_t).Nanoseconds(), 600 - frames)
+		//fmt.Printf("%v\n", t.Sub(last_t).Nanoseconds())
+		last_t = t
+
+		// write:
+		log.Printf("write(VGET)\n")
+		n, err := f.Write(sb)
+		if err != nil {
+			log.Printf("write(): %v\n", err)
+			continue
+		}
+		log.Printf("write(): wrote %d bytes\n", n)
+		if n != len(sb) {
+			log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
+			continue
+		}
+
+		// read:
+		data := readData(f, expectedPaddedBytes, expectedBytes)
+		if data == nil {
+			continue writeloop
+		}
+		log.Printf("VGET response:\n%s\n", hex.Dump(data))
+		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
+	}
+
+	runtime.UnlockOSThread()
+}
+
+func makeVGET(addr uint32, size uint8) []byte {
+	sb := make([]byte, 64)
+	sb[0] = byte('U')
+	sb[1] = byte('S')
+	sb[2] = byte('B')
+	sb[3] = byte('A')
+	sb[4] = byte(OpVGET)
+	sb[5] = byte(SpaceSNES)
+	sb[6] = byte(FlagDATA64B | FlagNORESP)
+	// 4-byte struct: 1 byte size, 3 byte address
+	sb[32] = byte(size)
+	sb[33] = byte((addr >> 16) & 0xFF)
+	sb[34] = byte((addr >> 8) & 0xFF)
+	sb[35] = byte((addr >> 0) & 0xFF)
+	return sb
+}
+
+func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
+	nr := 0
+	data = make([]byte, 0, expectedPaddedBytes)
+	for nr < expectedPaddedBytes {
+		rb := make([]byte, 256)
+		log.Printf("read()\n")
+		n, err := f.Read(rb)
+		if err != nil {
+			log.Printf("read(): %v\n", err)
+			return nil
+		}
+
+		nr += n
+		log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
+
+		data = append(data, rb[:n]...)
+	}
+
+	if nr != expectedPaddedBytes {
+		log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
+	}
+
+	data = data[:expectedBytes]
+	return
 }
