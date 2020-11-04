@@ -35,13 +35,14 @@ const (
 
 type server_flags uint8
 
+const FlagNONE server_flags = 0
 const (
-	FlagNONE      server_flags = 0
 	FlagSKIPRESET server_flags = 1 << iota
 	FlagONLYRESET
 	FlagCLRX
 	FlagSETX
 	FlagSTREAM_BURST
+	_
 	FlagNORESP
 	FlagDATA64B
 )
@@ -60,7 +61,8 @@ const (
 )
 
 type file_type uint8
+
 const (
 	FtDIRECTORY file_type = 0
-	FtFILE file_type = 1
+	FtFILE      file_type = 1
 )
