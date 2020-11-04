@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/hex"
-	"fmt"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 	"log"
@@ -36,10 +35,10 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("%s: Found USB port\n", port.Name)
+		log.Printf("%s: Found USB port\n", port.Name)
 		if port.IsUSB {
-			fmt.Printf("   USB ID     %s:%s\n", port.VID, port.PID)
-			fmt.Printf("   USB serial %s\n", port.SerialNumber)
+			log.Printf("   USB ID     %s:%s\n", port.VID, port.PID)
+			log.Printf("   USB serial %s\n", port.SerialNumber)
 		}
 
 		if port.SerialNumber == "DEMO00000000" {
