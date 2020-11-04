@@ -108,7 +108,7 @@ func main() {
 	})()
 
 	// Perform some timing tests:
-	const expectedBytes = 0xF0
+	const expectedBytes = 0xFF
 	const expectedPaddedBytes = 0x100
 	sb := make([]byte, 64)
 	sb[0] = byte('U')
@@ -119,8 +119,8 @@ func main() {
 	sb[5] = byte(SpaceSNES)
 	sb[6] = byte(FlagDATA64B | FlagNORESP)
 	// 4-byte struct: 1 byte size, 3 byte address
-	sb[32] = byte(0xF0)
-	addr := 0x7E0010
+	sb[32] = byte(expectedBytes)
+	addr := 0xF50000
 	sb[33] = byte((addr >> 16) & 0xFF)
 	sb[34] = byte((addr >> 8) & 0xFF)
 	sb[35] = byte((addr >> 0) & 0xFF)
@@ -166,6 +166,6 @@ writeloop:
 
 		data = data[:expectedBytes]
 		log.Printf("VGET response:\n%s\n", hex.Dump(data))
-		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x00], data[0x0A])
+		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
 	}
 }
