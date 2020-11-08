@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/hex"
+	"fmt"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
+	"io"
 	"log"
 	"os"
 	"runtime"
@@ -15,20 +17,25 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
 	timestamp := strings.ReplaceAll(time.Now().UTC().Format("2006-01-02T15-04-05.000000"), ".", "-")
+	logfilename := timestamp + ".txt"
 	logfile, err := os.OpenFile(
-		timestamp + ".txt",
+		logfilename,
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
 		0644)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
 		return
 	}
-	defer logfile.Close()
-	log.SetOutput(logfile)
+	defer (func() {
+		logfile.Close()
+		fmt.Printf("Output written to '%s'\n", logfilename)
+	})()
+	log.SetOutput(io.MultiWriter(logfile, os.Stdout))
 
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 
 	portName := ""
@@ -51,7 +58,8 @@ func main() {
 	}
 
 	if portName == "" {
-		log.Fatal("No FX Pak Pro found\n")
+		log.Println("No FX Pak Pro found")
+		return
 	}
 
 	// Try all the common baud rates in descending order:
@@ -87,7 +95,8 @@ func main() {
 		log.Printf("%s: %v\n", portName, err)
 	}
 	if err != nil {
-		log.Fatal("Failed to open serial port at any baud rate\n")
+		log.Println("Failed to open serial port at any baud rate")
+		return
 	}
 	log.Printf("%s: success!\n", portName)
 
@@ -227,6 +236,28 @@ func makeVGET(addr uint32, size uint8) []byte {
 	sb[33] = byte((addr >> 16) & 0xFF)
 	sb[34] = byte((addr >> 8) & 0xFF)
 	sb[35] = byte((addr >> 0) & 0xFF)
+	return sb
+}
+
+func makeGET(addr uint32, size uint32) []byte {
+	sb := make([]byte, 512)
+	sb[0] = byte('U')
+	sb[1] = byte('S')
+	sb[2] = byte('B')
+	sb[3] = byte('A')
+	sb[4] = byte(OpGET)
+	sb[5] = byte(SpaceSNES)
+	sb[6] = byte(FlagNONE)
+	// size:
+	sb[252] = byte((size >> 24) & 0xFF)
+	sb[253] = byte((size >> 16) & 0xFF)
+	sb[254] = byte((size >> 8) & 0xFF)
+	sb[255] = byte((size >> 0) & 0xFF)
+	// addr:
+	sb[256] = byte((addr >> 24) & 0xFF)
+	sb[257] = byte((addr >> 16) & 0xFF)
+	sb[258] = byte((addr >> 8) & 0xFF)
+	sb[259] = byte((addr >> 0) & 0xFF)
 	return sb
 }
 
