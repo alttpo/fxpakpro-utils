@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/aybabtme/uniplot/histogram"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 	"io"
@@ -121,8 +122,8 @@ func main() {
 	// Disable GC
 	debug.SetGCPercent(-1)
 
-	//writeTest(f)
-	writeTestSpinLoop(f)
+	writeTest(f)
+	//writeTestSpinLoop(f)
 }
 
 func writeTest(f serial.Port) {
@@ -133,9 +134,15 @@ func writeTest(f serial.Port) {
 
 	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
 
+	const iterations = 600
+	times := [iterations]float64{}
+
+	start := time.Now()
+	lastWrite := start
 writeloop:
-	for i := 0; i < 600; i++ {
+	for i := 0; i < iterations; i++ {
 		// write:
+		lastWrite = time.Now()
 		log.Printf("write(VGET)\n")
 		n, err := f.Write(sb)
 		if err != nil {
@@ -153,8 +160,20 @@ writeloop:
 		if data == nil {
 			continue writeloop
 		}
-		log.Printf("VGET response:\n%s\n", hex.Dump(data))
+		//log.Printf("VGET response:\n%s\n", hex.Dump(data))
 		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
+
+		times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
+	}
+	end := time.Now()
+
+	log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / 600)
+	hist := histogram.Hist(100, times[:])
+	err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
+		return time.Duration(v).String()
+	})
+	if err != nil {
+		log.Println(err)
 	}
 }
 
@@ -284,45 +303,6 @@ writeloop:
 	}
 
 	runtime.UnlockOSThread()
-}
-
-func makeVGET(addr uint32, size uint8) []byte {
-	sb := make([]byte, 64)
-	sb[0] = byte('U')
-	sb[1] = byte('S')
-	sb[2] = byte('B')
-	sb[3] = byte('A')
-	sb[4] = byte(OpVGET)
-	sb[5] = byte(SpaceSNES)
-	sb[6] = byte(FlagDATA64B | FlagNORESP)
-	// 4-byte struct: 1 byte size, 3 byte address
-	sb[32] = byte(size)
-	sb[33] = byte((addr >> 16) & 0xFF)
-	sb[34] = byte((addr >> 8) & 0xFF)
-	sb[35] = byte((addr >> 0) & 0xFF)
-	return sb
-}
-
-func makeGET(addr uint32, size uint32) []byte {
-	sb := make([]byte, 512)
-	sb[0] = byte('U')
-	sb[1] = byte('S')
-	sb[2] = byte('B')
-	sb[3] = byte('A')
-	sb[4] = byte(OpGET)
-	sb[5] = byte(SpaceSNES)
-	sb[6] = byte(FlagNONE)
-	// size:
-	sb[252] = byte((size >> 24) & 0xFF)
-	sb[253] = byte((size >> 16) & 0xFF)
-	sb[254] = byte((size >> 8) & 0xFF)
-	sb[255] = byte((size >> 0) & 0xFF)
-	// addr:
-	sb[256] = byte((addr >> 24) & 0xFF)
-	sb[257] = byte((addr >> 16) & 0xFF)
-	sb[258] = byte((addr >> 8) & 0xFF)
-	sb[259] = byte((addr >> 0) & 0xFF)
-	return sb
 }
 
 func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
