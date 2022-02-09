@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"github.com/aybabtme/uniplot/histogram"
 	"go.bug.st/serial"
@@ -16,6 +17,10 @@ import (
 )
 
 func main() {
+	doVGET := flag.Bool("vget", false, "run VGET tests")
+	doGET := flag.Bool("get", false, "run GET tests")
+	flag.Parse()
+
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
 	timestamp := strings.ReplaceAll(time.Now().UTC().Format("2006-01-02T15-04-05.000000"), ".", "-")
 	logfilename := timestamp + ".txt"
@@ -122,15 +127,21 @@ func main() {
 	// Disable GC
 	debug.SetGCPercent(-1)
 
-	writeGETTest(f)
-	//writeVGETTest(f)
+	if *doVGET {
+		writeVGETTest(f)
+	}
+
+	if *doGET {
+		writeGETTest(f)
+	}
+
 	//writeTestSpinLoop(f)
 }
 
 func writeGETTest(f serial.Port) {
 	// Perform some timing tests:
 	gatherSizes := [...]uint32{
-		0x01*8, 0x02*8, 0x04*8, 0x08*8, 0x10*8, 0x20*8, 0x40*8, 0x80*8, 0xFF*8,
+		0x01 * 8, 0x02 * 8, 0x04 * 8, 0x08 * 8, 0x10 * 8, 0x20 * 8, 0x40 * 8, 0x80 * 8, 0xFF * 8,
 		0x1000, 0x2000, 0x4000, 0x8000, 0x10000}
 	for _, size := range gatherSizes {
 		var sb [512]byte
@@ -201,12 +212,14 @@ func writeGETTest(f serial.Port) {
 			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
 
 			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
-			if i >= 1 && times[i] - times[i-1] >= 40_000_000 {
+			if i >= 1 && times[i]-times[i-1] >= 20_000_000 {
 				// too large delta; retry:
-				i--
 				retries++
 				if retries < 3 {
+					i--
 					continue
+				} else {
+					retries = 0
 				}
 			} else {
 				retries = 0
@@ -303,6 +316,7 @@ func writeVGETTest(f serial.Port) {
 
 		start := time.Now()
 		lastWrite := start
+		retries := 0
 	writeloop:
 		for i := 0; i < iterations; i++ {
 			// write:
@@ -328,10 +342,17 @@ func writeVGETTest(f serial.Port) {
 			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
 
 			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
-			if times[i] >= 40_000_000 {
-				// too long; retry:
-				i--
-				continue
+			if i >= 1 && times[i]-times[i-1] >= 20_000_000 {
+				// too large delta; retry:
+				retries++
+				if retries <= 5 {
+					i--
+					continue
+				} else {
+					retries = 0
+				}
+			} else {
+				retries = 0
 			}
 		}
 
