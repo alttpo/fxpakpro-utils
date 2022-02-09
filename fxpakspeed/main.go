@@ -7,11 +7,12 @@ import (
 	"github.com/aybabtme/uniplot/histogram"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 	"io"
 	"log"
 	"math"
 	"os"
-	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -140,10 +141,14 @@ func main() {
 }
 
 func writeGETTest(f serial.Port) {
+	p := message.NewPrinter(language.AmericanEnglish)
+
+	var tmp [0x2200]byte
+
 	// Perform some timing tests:
 	gatherSizes := [...]uint32{
 		0x01 * 8, 0x02 * 8, 0x04 * 8, 0x08 * 8, 0x10 * 8, 0x20 * 8, 0x40 * 8, 0x80 * 8, 0xFF * 8,
-		0x1000, 0x2000, 0x4000, 0x8000, 0x10000}
+		0x1000, 0x2000}
 	for _, size := range gatherSizes {
 		var sb [512]byte
 		sb[0] = byte('U')
@@ -174,12 +179,11 @@ func writeGETTest(f serial.Port) {
 
 		log.Printf("GET command:\n%s\n", hex.Dump(sb[:]))
 
-		const iterations = 250
+		const iterations = 500
 		times := [iterations]float64{}
 
 		start := time.Now()
 		lastWrite := start
-	writeloop:
 		for i := 0; i < iterations; i++ {
 			// write:
 			lastWrite = time.Now()
@@ -200,13 +204,14 @@ func writeGETTest(f serial.Port) {
 			err = readChunk(f, rsp[:])
 			if err != nil {
 				log.Println(err)
-				continue writeloop
+				continue
 			}
 
 			// read:
-			data := readData512(f, expectedPaddedBytes, expectedBytes)
-			if data == nil {
-				continue writeloop
+			err = readChunk(f, tmp[:expectedPaddedBytes])
+			if err != nil {
+				log.Printf("readChunk(): %v\n", err)
+				continue
 			}
 			//log.Printf("GET response:\n%s\n", hex.Dump(data))
 			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
@@ -217,20 +222,15 @@ func writeGETTest(f serial.Port) {
 		//end := time.Now()
 		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
 
-		cleaned, outliers := cleanData(times[:])
-		log.Printf("outliers: %v\n", outliers)
-
-		hist := histogram.Hist(20, cleaned)
-		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
-			return time.Duration(v).String()
-		})
-		if err != nil {
-			log.Println(err)
-		}
+		reportHistograms(times[:], p)
 	}
 }
 
 func writeVGETTest(f serial.Port) {
+	p := message.NewPrinter(language.AmericanEnglish)
+
+	var tmp [0x2200]byte
+
 	// Perform some timing tests:
 	gatherSizes := [...]uint8{0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0xFF}
 	for _, size := range gatherSizes {
@@ -266,7 +266,6 @@ func writeVGETTest(f serial.Port) {
 
 		start := time.Now()
 		lastWrite := start
-	writeloop:
 		for i := 0; i < iterations; i++ {
 			// write:
 			lastWrite = time.Now()
@@ -283,9 +282,10 @@ func writeVGETTest(f serial.Port) {
 			}
 
 			// read:
-			data := readData(f, expectedPaddedBytes, expectedBytes)
-			if data == nil {
-				continue writeloop
+			err = readChunk(f, tmp[:expectedPaddedBytes])
+			if err != nil {
+				log.Printf("readChunk(): %v\n", err)
+				continue
 			}
 			//log.Printf("VGET response:\n%s\n", hex.Dump(data))
 			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
@@ -296,16 +296,33 @@ func writeVGETTest(f serial.Port) {
 		//end := time.Now()
 		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
 
-		cleaned, outliers := cleanData(times[:])
-		log.Printf("outliers: %v\n", outliers)
+		reportHistograms(times[:], p)
+	}
+}
 
-		hist := histogram.Hist(20, cleaned)
-		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
-			return time.Duration(v).String()
-		})
-		if err != nil {
-			log.Println(err)
-		}
+func reportHistograms(times []float64, p *message.Printer) {
+	cleaned, outliers := cleanData(times[:])
+
+	hist := histogram.Hist(10, cleaned)
+	err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
+		return p.Sprintf("% 11dns", time.Duration(v).Nanoseconds())
+		//return fmt.Sprintf("% 10dns", time.Duration(v).Nanoseconds())
+		//return time.Duration(v).String()
+	})
+	if err != nil {
+		log.Println(err)
+	}
+
+	fmt.Println()
+
+	hist = histogram.Hist(10, outliers)
+	err = histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
+		return p.Sprintf("% 11dns", time.Duration(v).Nanoseconds())
+		//return fmt.Sprintf("% 10dns", time.Duration(v).Nanoseconds())
+		//return time.Duration(v).String()
+	})
+	if err != nil {
+		log.Println(err)
 	}
 }
 
@@ -318,36 +335,10 @@ func readChunk(f serial.Port, chunk []byte) (err error) {
 			return fmt.Errorf("readChunk: error; read %d bytes: %w\n", n, err)
 		}
 	}
-	if ns != 512 {
+	if ns != len(chunk) {
 		return fmt.Errorf("readChunk: expected to read %d bytes but read %d\n", len(chunk), n)
 	}
 	return nil
-}
-
-func readData512(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
-	nr := 0
-	data = make([]byte, 0, expectedPaddedBytes)
-	for nr < expectedPaddedBytes {
-		rb := make([]byte, 512)
-		//log.Printf("read()\n")
-		n, err := f.Read(rb)
-		if err != nil {
-			log.Printf("read(): %v\n", err)
-			return nil
-		}
-
-		nr += n
-		//log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
-
-		data = append(data, rb[:n]...)
-	}
-
-	if nr != expectedPaddedBytes {
-		log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
-	}
-
-	data = data[:expectedBytes]
-	return
 }
 
 func cleanData(a []float64) (cleaned []float64, outliers []float64) {
@@ -366,158 +357,4 @@ func cleanData(a []float64) (cleaned []float64, outliers []float64) {
 		}
 	}
 	return
-}
-
-func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
-	nr := 0
-	data = make([]byte, 0, expectedPaddedBytes)
-	for nr < expectedPaddedBytes {
-		rb := make([]byte, 64)
-		//log.Printf("read()\n")
-		n, err := f.Read(rb)
-		if err != nil {
-			log.Printf("read(): %v\n", err)
-			return nil
-		}
-
-		nr += n
-		//log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
-
-		data = append(data, rb[:n]...)
-	}
-
-	if nr != expectedPaddedBytes {
-		log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
-	}
-
-	data = data[:expectedBytes]
-	return
-}
-
-func writeTestSpinLoop(f serial.Port) {
-	runtime.LockOSThread()
-
-	// SNES master clock ~= 1.89e9/88 Hz
-	// SNES runs 1 scanline every 1364 master cycles
-	// Frames are 262 scanlines in non-interlace mode (1 scanline takes 1360 clocks every other frame)
-	// 1 frame takes 357366 master clocks
-	const snes_frame_clocks = (261 * 1364) + 1362
-
-	const snes_frame_nanoclocks = snes_frame_clocks * 1_000_000_000
-
-	// 1 frame takes 0.016639356613757 seconds
-	// 0.016639356613757 seconds = 16,639,356.613757 nanoseconds
-
-	const snes_frame_time_nanoseconds_int = int(snes_frame_nanoclocks) / (int(1.89e9) / int(88))
-	const snes_frame_time_nanoseconds_flt = snes_frame_nanoclocks / ((1.89e9) / 88)
-
-	// Perform some timing tests:
-	const expectedBytes = 0xFF
-	const expectedPaddedBytes = 0x100
-	sb := makeVGET(0xF50000, expectedBytes)
-
-	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
-
-	// duration between VGETs:
-	const dur = time.Nanosecond * time.Duration(snes_frame_time_nanoseconds_int)
-
-	last_t := time.Now()
-
-writeloop:
-	for i := 0; i < 600; i++ {
-		for time.Since(last_t) < dur {
-		}
-		t := time.Now()
-
-		//log.Printf("delta %v ns; %d frames remaining\n", t.Sub(last_t).Nanoseconds(), 600 - frames)
-		//fmt.Printf("%v\n", t.Sub(last_t).Nanoseconds())
-		last_t = t
-
-		// write:
-		log.Printf("write(VGET)\n")
-		n, err := f.Write(sb)
-		if err != nil {
-			log.Printf("write(): %v\n", err)
-			continue
-		}
-		log.Printf("write(): wrote %d bytes\n", n)
-		if n != len(sb) {
-			log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
-			continue
-		}
-
-		// read:
-		data := readData(f, expectedPaddedBytes, expectedBytes)
-		if data == nil {
-			continue writeloop
-		}
-		log.Printf("VGET response:\n%s\n", hex.Dump(data))
-		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
-	}
-
-	runtime.UnlockOSThread()
-}
-
-func writeTestSpinLoopMeasure(f serial.Port) {
-	runtime.LockOSThread()
-
-	// SNES master clock ~= 1.89e9/88 Hz
-	// SNES runs 1 scanline every 1364 master cycles
-	// Frames are 262 scanlines in non-interlace mode (1 scanline takes 1360 clocks every other frame)
-	// 1 frame takes 357366 master clocks
-	const snes_frame_clocks = (261 * 1364) + 1362
-
-	const snes_frame_nanoclocks = snes_frame_clocks * 1_000_000_000
-
-	// 1 frame takes 0.016639356613757 seconds
-	// 0.016639356613757 seconds = 16,639,356.613757 nanoseconds
-
-	const snes_frame_time_nanoseconds_int = int(snes_frame_nanoclocks) / (int(1.89e9) / int(88))
-	const snes_frame_time_nanoseconds_flt = snes_frame_nanoclocks / ((1.89e9) / 88)
-
-	// Perform some timing tests:
-	const expectedBytes = 0xFF
-	const expectedPaddedBytes = 0x100
-	sb := makeVGET(0xF50000, expectedBytes)
-
-	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
-
-	// duration between VGETs:
-	const dur = time.Nanosecond * time.Duration(snes_frame_time_nanoseconds_int)
-
-	last_t := time.Now()
-
-writeloop:
-	for i := 0; i < 600; i++ {
-		for time.Since(last_t) < dur {
-		}
-		t := time.Now()
-
-		//log.Printf("delta %v ns; %d frames remaining\n", t.Sub(last_t).Nanoseconds(), 600 - frames)
-		//fmt.Printf("%v\n", t.Sub(last_t).Nanoseconds())
-		last_t = t
-
-		// write:
-		log.Printf("write(VGET)\n")
-		n, err := f.Write(sb)
-		if err != nil {
-			log.Printf("write(): %v\n", err)
-			continue
-		}
-		log.Printf("write(): wrote %d bytes\n", n)
-		if n != len(sb) {
-			log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
-			continue
-		}
-
-		// read:
-		data := readData(f, expectedPaddedBytes, expectedBytes)
-		if data == nil {
-			continue writeloop
-		}
-		//log.Printf("VGET response:\n%s\n", hex.Dump(data))
-		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
-	}
-
-	runtime.UnlockOSThread()
 }
