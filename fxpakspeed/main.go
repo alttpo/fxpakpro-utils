@@ -128,52 +128,82 @@ func main() {
 
 func writeTest(f serial.Port) {
 	// Perform some timing tests:
-	const expectedBytes = 0xFF
-	const expectedPaddedBytes = 0x100
-	sb := makeVGET(0xF50000, expectedBytes)
+	gatherSizes := [...]uint8{0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0xFF}
+	for _, size := range gatherSizes {
+		var sb [64]byte
+		sb[0] = byte('U')
+		sb[1] = byte('S')
+		sb[2] = byte('B')
+		sb[3] = byte('A')
+		sb[4] = byte(OpVGET)
+		sb[5] = byte(SpaceSNES)
+		sb[6] = byte(FlagDATA64B | FlagNORESP)
 
-	log.Printf("VGET command:\n%s\n", hex.Dump(sb))
+		addr := uint32(0xF50000)
+		expectedBytes := 0
+		for i := 0; i < 8; i++ {
+			sb[32+i*4] = byte(size)
+			sb[33+i*4] = byte((addr >> 16) & 0xFF)
+			sb[34+i*4] = byte((addr >> 8) & 0xFF)
+			sb[35+i*4] = byte((addr >> 0) & 0xFF)
+			addr += uint32(size)
+			expectedBytes += int(size)
+		}
 
-	const iterations = 600
-	times := [iterations]float64{}
+		expectedPaddedBytes := (expectedBytes / 64) * 64
+		if expectedBytes&0x3F != 0 {
+			expectedPaddedBytes += 64
+		}
 
-	start := time.Now()
-	lastWrite := start
-writeloop:
-	for i := 0; i < iterations; i++ {
-		// write:
-		lastWrite = time.Now()
-		log.Printf("write(VGET)\n")
-		n, err := f.Write(sb)
+		log.Printf("VGET command:\n%s\n", hex.Dump(sb[:]))
+
+		const iterations = 500
+		times := [iterations]float64{}
+
+		start := time.Now()
+		lastWrite := start
+	writeloop:
+		for i := 0; i < iterations; i++ {
+			// write:
+			lastWrite = time.Now()
+			// log.Printf("write(VGET)\n")
+			n, err := f.Write(sb[:])
+			if err != nil {
+				log.Printf("write(): %v\n", err)
+				continue
+			}
+			// log.Printf("write(): wrote %d bytes\n", n)
+			if n != len(sb[:]) {
+				log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
+				continue
+			}
+
+			// read:
+			data := readData(f, expectedPaddedBytes, expectedBytes)
+			if data == nil {
+				continue writeloop
+			}
+			//log.Printf("VGET response:\n%s\n", hex.Dump(data))
+			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
+
+			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
+			if times[i] >= 40_000_000 {
+				// too long; retry:
+				i--
+				continue
+			}
+		}
+
+		//end := time.Now()
+		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
+
+		hist := histogram.Hist(20, times[:])
+		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
+			return time.Duration(v).String()
+		})
 		if err != nil {
-			log.Printf("write(): %v\n", err)
-			continue
+			log.Println(err)
 		}
-		log.Printf("write(): wrote %d bytes\n", n)
-		if n != len(sb) {
-			log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
-			continue
-		}
-
-		// read:
-		data := readData(f, expectedPaddedBytes, expectedBytes)
-		if data == nil {
-			continue writeloop
-		}
-		//log.Printf("VGET response:\n%s\n", hex.Dump(data))
-		log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
-
-		times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
-	}
-	end := time.Now()
-
-	log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / 600)
-	hist := histogram.Hist(100, times[:])
-	err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
-		return time.Duration(v).String()
-	})
-	if err != nil {
-		log.Println(err)
 	}
 }
 
@@ -309,8 +339,8 @@ func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data [
 	nr := 0
 	data = make([]byte, 0, expectedPaddedBytes)
 	for nr < expectedPaddedBytes {
-		rb := make([]byte, 256)
-		log.Printf("read()\n")
+		rb := make([]byte, 64)
+		//log.Printf("read()\n")
 		n, err := f.Read(rb)
 		if err != nil {
 			log.Printf("read(): %v\n", err)
@@ -318,7 +348,7 @@ func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data [
 		}
 
 		nr += n
-		log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
+		//log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
 
 		data = append(data, rb[:n]...)
 	}
