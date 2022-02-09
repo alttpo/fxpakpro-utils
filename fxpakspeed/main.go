@@ -122,11 +122,152 @@ func main() {
 	// Disable GC
 	debug.SetGCPercent(-1)
 
-	writeTest(f)
+	writeGETTest(f)
+	//writeVGETTest(f)
 	//writeTestSpinLoop(f)
 }
 
-func writeTest(f serial.Port) {
+func writeGETTest(f serial.Port) {
+	// Perform some timing tests:
+	gatherSizes := [...]uint32{
+		0x01*8, 0x02*8, 0x04*8, 0x08*8, 0x10*8, 0x20*8, 0x40*8, 0x80*8, 0xFF*8,
+		0x1000, 0x2000, 0x4000, 0x8000, 0x10000}
+	for _, size := range gatherSizes {
+		var sb [512]byte
+		sb[0] = byte('U')
+		sb[1] = byte('S')
+		sb[2] = byte('B')
+		sb[3] = byte('A')
+		sb[4] = byte(OpGET)
+		sb[5] = byte(SpaceSNES)
+		sb[6] = byte(FlagNONE)
+
+		addr := uint32(0xF50000)
+		// size:
+		sb[252] = byte((size >> 24) & 0xFF)
+		sb[253] = byte((size >> 16) & 0xFF)
+		sb[254] = byte((size >> 8) & 0xFF)
+		sb[255] = byte((size >> 0) & 0xFF)
+		// addr:
+		sb[256] = byte((addr >> 24) & 0xFF)
+		sb[257] = byte((addr >> 16) & 0xFF)
+		sb[258] = byte((addr >> 8) & 0xFF)
+		sb[259] = byte((addr >> 0) & 0xFF)
+
+		expectedBytes := int(size)
+		expectedPaddedBytes := (expectedBytes / 512) * 512
+		if expectedBytes&511 != 0 {
+			expectedPaddedBytes += 512
+		}
+
+		log.Printf("GET command:\n%s\n", hex.Dump(sb[:]))
+
+		const iterations = 250
+		times := [iterations]float64{}
+
+		start := time.Now()
+		lastWrite := start
+		retries := 0
+	writeloop:
+		for i := 0; i < iterations; i++ {
+			// write:
+			lastWrite = time.Now()
+			// log.Printf("write(GET)\n")
+			n, err := f.Write(sb[:])
+			if err != nil {
+				log.Printf("write(): %v\n", err)
+				continue
+			}
+			// log.Printf("write(): wrote %d bytes\n", n)
+			if n != len(sb[:]) {
+				log.Printf("write(): expected to write 512 bytes but wrote %d\n", n)
+				continue
+			}
+
+			// response:
+			var rsp [512]byte
+			err = readChunk(f, rsp[:])
+			if err != nil {
+				log.Println(err)
+				continue writeloop
+			}
+
+			// read:
+			data := readData512(f, expectedPaddedBytes, expectedBytes)
+			if data == nil {
+				continue writeloop
+			}
+			//log.Printf("GET response:\n%s\n", hex.Dump(data))
+			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
+
+			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
+			if i >= 1 && times[i] - times[i-1] >= 40_000_000 {
+				// too large delta; retry:
+				i--
+				retries++
+				if retries < 3 {
+					continue
+				}
+			} else {
+				retries = 0
+			}
+		}
+
+		//end := time.Now()
+		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
+
+		hist := histogram.Hist(20, times[:])
+		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
+			return time.Duration(v).String()
+		})
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+func readChunk(f serial.Port, chunk []byte) (err error) {
+	n := 0
+	ns := 0
+	for ; ns < len(chunk); ns += n {
+		n, err = f.Read(chunk[ns:])
+		if err != nil {
+			return fmt.Errorf("readChunk: error; read %d bytes: %w\n", n, err)
+		}
+	}
+	if ns != 512 {
+		return fmt.Errorf("readChunk: expected to read %d bytes but read %d\n", len(chunk), n)
+	}
+	return nil
+}
+
+func readData512(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
+	nr := 0
+	data = make([]byte, 0, expectedPaddedBytes)
+	for nr < expectedPaddedBytes {
+		rb := make([]byte, 512)
+		//log.Printf("read()\n")
+		n, err := f.Read(rb)
+		if err != nil {
+			log.Printf("read(): %v\n", err)
+			return nil
+		}
+
+		nr += n
+		//log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
+
+		data = append(data, rb[:n]...)
+	}
+
+	if nr != expectedPaddedBytes {
+		log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
+	}
+
+	data = data[:expectedBytes]
+	return
+}
+
+func writeVGETTest(f serial.Port) {
 	// Perform some timing tests:
 	gatherSizes := [...]uint8{0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0xFF}
 	for _, size := range gatherSizes {
