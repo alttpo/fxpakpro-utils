@@ -9,6 +9,7 @@ import (
 	"go.bug.st/serial/enumerator"
 	"io"
 	"log"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -178,7 +179,6 @@ func writeGETTest(f serial.Port) {
 
 		start := time.Now()
 		lastWrite := start
-		retries := 0
 	writeloop:
 		for i := 0; i < iterations; i++ {
 			// write:
@@ -212,24 +212,94 @@ func writeGETTest(f serial.Port) {
 			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
 
 			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
-			if i >= 1 && times[i]-times[i-1] >= 20_000_000 {
-				// too large delta; retry:
-				retries++
-				if retries < 3 {
-					i--
-					continue
-				} else {
-					retries = 0
-				}
-			} else {
-				retries = 0
-			}
 		}
 
 		//end := time.Now()
 		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
 
-		hist := histogram.Hist(20, times[:])
+		cleaned, outliers := cleanData(times[:])
+		log.Printf("outliers: %v\n", outliers)
+
+		hist := histogram.Hist(20, cleaned)
+		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
+			return time.Duration(v).String()
+		})
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+func writeVGETTest(f serial.Port) {
+	// Perform some timing tests:
+	gatherSizes := [...]uint8{0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0xFF}
+	for _, size := range gatherSizes {
+		var sb [64]byte
+		sb[0] = byte('U')
+		sb[1] = byte('S')
+		sb[2] = byte('B')
+		sb[3] = byte('A')
+		sb[4] = byte(OpVGET)
+		sb[5] = byte(SpaceSNES)
+		sb[6] = byte(FlagDATA64B | FlagNORESP)
+
+		addr := uint32(0xF50000)
+		expectedBytes := 0
+		for i := 0; i < 8; i++ {
+			sb[32+i*4] = byte(size)
+			sb[33+i*4] = byte((addr >> 16) & 0xFF)
+			sb[34+i*4] = byte((addr >> 8) & 0xFF)
+			sb[35+i*4] = byte((addr >> 0) & 0xFF)
+			addr += uint32(size)
+			expectedBytes += int(size)
+		}
+
+		expectedPaddedBytes := (expectedBytes / 64) * 64
+		if expectedBytes&0x3F != 0 {
+			expectedPaddedBytes += 64
+		}
+
+		log.Printf("VGET command:\n%s\n", hex.Dump(sb[:]))
+
+		const iterations = 500
+		times := [iterations]float64{}
+
+		start := time.Now()
+		lastWrite := start
+	writeloop:
+		for i := 0; i < iterations; i++ {
+			// write:
+			lastWrite = time.Now()
+			// log.Printf("write(VGET)\n")
+			n, err := f.Write(sb[:])
+			if err != nil {
+				log.Printf("write(): %v\n", err)
+				continue
+			}
+			// log.Printf("write(): wrote %d bytes\n", n)
+			if n != len(sb[:]) {
+				log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
+				continue
+			}
+
+			// read:
+			data := readData(f, expectedPaddedBytes, expectedBytes)
+			if data == nil {
+				continue writeloop
+			}
+			//log.Printf("VGET response:\n%s\n", hex.Dump(data))
+			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
+
+			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
+		}
+
+		//end := time.Now()
+		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
+
+		cleaned, outliers := cleanData(times[:])
+		log.Printf("outliers: %v\n", outliers)
+
+		hist := histogram.Hist(20, cleaned)
 		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
 			return time.Duration(v).String()
 		})
@@ -280,93 +350,48 @@ func readData512(f serial.Port, expectedPaddedBytes int, expectedBytes int) (dat
 	return
 }
 
-func writeVGETTest(f serial.Port) {
-	// Perform some timing tests:
-	gatherSizes := [...]uint8{0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0xFF}
-	for _, size := range gatherSizes {
-		var sb [64]byte
-		sb[0] = byte('U')
-		sb[1] = byte('S')
-		sb[2] = byte('B')
-		sb[3] = byte('A')
-		sb[4] = byte(OpVGET)
-		sb[5] = byte(SpaceSNES)
-		sb[6] = byte(FlagDATA64B | FlagNORESP)
-
-		addr := uint32(0xF50000)
-		expectedBytes := 0
-		for i := 0; i < 8; i++ {
-			sb[32+i*4] = byte(size)
-			sb[33+i*4] = byte((addr >> 16) & 0xFF)
-			sb[34+i*4] = byte((addr >> 8) & 0xFF)
-			sb[35+i*4] = byte((addr >> 0) & 0xFF)
-			addr += uint32(size)
-			expectedBytes += int(size)
-		}
-
-		expectedPaddedBytes := (expectedBytes / 64) * 64
-		if expectedBytes&0x3F != 0 {
-			expectedPaddedBytes += 64
-		}
-
-		log.Printf("VGET command:\n%s\n", hex.Dump(sb[:]))
-
-		const iterations = 500
-		times := [iterations]float64{}
-
-		start := time.Now()
-		lastWrite := start
-		retries := 0
-	writeloop:
-		for i := 0; i < iterations; i++ {
-			// write:
-			lastWrite = time.Now()
-			// log.Printf("write(VGET)\n")
-			n, err := f.Write(sb[:])
-			if err != nil {
-				log.Printf("write(): %v\n", err)
-				continue
-			}
-			// log.Printf("write(): wrote %d bytes\n", n)
-			if n != len(sb[:]) {
-				log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
-				continue
-			}
-
-			// read:
-			data := readData(f, expectedPaddedBytes, expectedBytes)
-			if data == nil {
-				continue writeloop
-			}
-			//log.Printf("VGET response:\n%s\n", hex.Dump(data))
-			//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
-
-			times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
-			if i >= 1 && times[i]-times[i-1] >= 20_000_000 {
-				// too large delta; retry:
-				retries++
-				if retries <= 5 {
-					i--
-					continue
-				} else {
-					retries = 0
-				}
+func cleanData(a []float64) (cleaned []float64, outliers []float64) {
+	cleaned = make([]float64, 0, len(a))
+	for i := 1; i < len(a); i += 2 {
+		if math.Abs(a[i]-a[i-1]) >= 10_000_000 {
+			if a[i] > a[i-1] {
+				outliers = append(outliers, a[i])
+				cleaned = append(cleaned, a[i-1])
 			} else {
-				retries = 0
+				outliers = append(outliers, a[i-1])
+				cleaned = append(cleaned, a[i])
 			}
-		}
-
-		//end := time.Now()
-		//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
-
-		hist := histogram.Hist(20, times[:])
-		err := histogram.Fprintf(log.Writer(), hist, histogram.Linear(40), func(v float64) string {
-			return time.Duration(v).String()
-		})
-		if err != nil {
-			log.Println(err)
+		} else {
+			cleaned = append(cleaned, a[i-1], a[i])
 		}
 	}
+	return
+}
+
+func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
+	nr := 0
+	data = make([]byte, 0, expectedPaddedBytes)
+	for nr < expectedPaddedBytes {
+		rb := make([]byte, 64)
+		//log.Printf("read()\n")
+		n, err := f.Read(rb)
+		if err != nil {
+			log.Printf("read(): %v\n", err)
+			return nil
+		}
+
+		nr += n
+		//log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
+
+		data = append(data, rb[:n]...)
+	}
+
+	if nr != expectedPaddedBytes {
+		log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
+	}
+
+	data = data[:expectedBytes]
+	return
 }
 
 func writeTestSpinLoop(f serial.Port) {
@@ -495,30 +520,4 @@ writeloop:
 	}
 
 	runtime.UnlockOSThread()
-}
-
-func readData(f serial.Port, expectedPaddedBytes int, expectedBytes int) (data []byte) {
-	nr := 0
-	data = make([]byte, 0, expectedPaddedBytes)
-	for nr < expectedPaddedBytes {
-		rb := make([]byte, 64)
-		//log.Printf("read()\n")
-		n, err := f.Read(rb)
-		if err != nil {
-			log.Printf("read(): %v\n", err)
-			return nil
-		}
-
-		nr += n
-		//log.Printf("read(): %d bytes (%d bytes total)\n", n, nr)
-
-		data = append(data, rb[:n]...)
-	}
-
-	if nr != expectedPaddedBytes {
-		log.Printf("read(): expected %d padded bytes but got %d\n", expectedPaddedBytes, nr)
-	}
-
-	data = data[:expectedBytes]
-	return
 }
