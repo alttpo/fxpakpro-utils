@@ -116,37 +116,35 @@ func iovmTest(f serial.Port) {
 	b := sb[8:8:cap(sb)]
 	// wait until [$2C00] & $FF == 0:
 	b = append(b, 0x02, 0x05, 0x00, 0x00, 0x00, 0x00, 0xFF)
-	// write to $2C00: LDA #$04; STA $7EF359; STZ $2C00; JMP ($FFEA)
+	// read WRAM at [$7EF340] for 256 bytes:
+	b = append(b, 0x00, 0x00, 0x40, 0xF3, 0x00, 0x00)
+	// write to $2C00: `LDA #$04; STA $7EF359; STZ $2C00; JMP ($FFEA)`
 	b = append(b, 0x01, 0x05, 0x00, 0x00, 0x00, 0x0C, 0xA9, 0x04, 0x8F, 0x59, 0xF3, 0x7E, 0x9C, 0x00, 0x2C, 0x6C, 0xEA, 0xFF)
 
 	// set length of program:
 	sb[7] = byte(len(b))
 
-	log.Printf("send:\n%s\n", hex.Dump(sb[:]))
+	log.Printf("write: %d bytes\n%s\n", len(sb[:]), hex.Dump(sb[:]))
 	_, err := f.Write(sb[:])
 	if err != nil {
 		log.Printf("write(): %v\n", err)
 		return
 	}
 
-	fullrsp := make([]byte, 0, 4096)
 	rsp := [512]byte{}
 	for {
 		var n int
-		f.SetReadTimeout(time.Second)
+
+		_ = f.SetReadTimeout(time.Second)
 		n, err = f.Read(rsp[:])
 		if err != nil {
 			log.Printf("write(): %v\n", err)
 			return
 		}
 
-		log.Printf("chunk:\n%s\n", hex.Dump(rsp[:n]))
+		log.Printf("read: %d bytes\n%s\n", n, hex.Dump(rsp[:n]))
 		if n == 0 {
 			break
 		}
-
-		fullrsp = append(fullrsp, rsp[:n]...)
 	}
-
-	log.Printf("full:\n%s\n", hex.Dump(fullrsp))
 }
