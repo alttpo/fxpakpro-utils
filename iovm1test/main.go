@@ -102,16 +102,17 @@ func main() {
 	// Disable GC
 	debug.SetGCPercent(-1)
 
-	speedTest(f)
+	//speedTest(f)
 
 	disableSram(f)
 
 	//iovmTest1(f)
 	//iovmTest2(f)
+	speedTest2(f)
 
-	speedTest(f)
+	//speedTest(f)
 
-	enableSram(f)
+	//enableSram(f)
 }
 
 func readUntilTimeout(f serial.Port, cb func([]byte)) {
@@ -273,6 +274,69 @@ func speedTest(f serial.Port) {
 	sb[6] = byte(FlagDATA64B)
 	// 0-byte VM program just to test baseline latency:
 	sb[7] = 0
+
+	const iterations = 1000
+	times := [iterations]float64{}
+
+	start := time.Now()
+	lastWrite := start
+	for i := 0; i < iterations; i++ {
+		// write:
+		lastWrite = time.Now()
+		n, err := f.Write(sb[:])
+		if err != nil {
+			log.Printf("write(): %v\n", err)
+			continue
+		}
+		// log.Printf("write(): wrote %d bytes\n", n)
+		if n != len(sb[:]) {
+			log.Printf("write(): expected to write 64 bytes but wrote %d\n", n)
+			continue
+		}
+
+		// read:
+		err = readChunk(f, tmp[:])
+		if err != nil {
+			log.Printf("readChunk(): %v\n", err)
+			continue
+		}
+		//log.Printf("VGET response:\n%s\n", hex.Dump(data))
+		//log.Printf("[$10] = $%02x; [$1A] = $%02x\n", data[0x10], data[0x1A])
+
+		times[i] = float64(time.Now().Sub(lastWrite).Nanoseconds())
+	}
+
+	//end := time.Now()
+	//log.Printf("%#v ns total; %#v ns avg\n", end.Sub(start).Nanoseconds(), end.Sub(start).Nanoseconds() / iterations)
+
+	reportHistograms(times[:], p)
+}
+
+func speedTest2(f serial.Port) {
+	p := message.NewPrinter(language.AmericanEnglish)
+
+	log.Printf("1000 iterations of speed test\n")
+
+	var tmp [64]byte
+
+	var sb [64]byte
+	sb[0] = byte('U')
+	sb[1] = byte('S')
+	sb[2] = byte('B')
+	sb[3] = byte('A')
+	sb[4] = byte(OpIOVM_EXEC)
+	sb[5] = byte(SpaceSNES)
+	sb[6] = byte(FlagDATA64B)
+
+	b := sb[8:8:cap(sb)]
+	// wait until [$2C00] & $FF == 0:
+	b = append(b, 0x02, 0x05, 0x00, 0x00, 0x00, 0x00, 0xFF)
+	// write to $2C00: `STZ $2C00; JMP ($FFEA)`
+	b = append(b, 0x01, 0x05, 0x00, 0x00, 0x00)
+	b = append(b, 0x06, 0x9C, 0x00, 0x2C, 0x6C, 0xEA, 0xFF)
+
+	// set length of program:
+	sb[7] = byte(len(b))
 
 	const iterations = 1000
 	times := [iterations]float64{}
